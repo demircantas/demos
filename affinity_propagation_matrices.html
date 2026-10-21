@@ -85,6 +85,7 @@
   .election dt code { font-weight: 400; color: var(--muted); font-size: 12.5px; }
   .election dd { margin: 2px 0 0; font-size: 13.5px; }
   .cell .say { font-size: 15px; margin: 0 0 10px; }
+  .log { margin: 10px 0 0; padding: 8px 10px; background: var(--bg); border-radius: 6px; font-size: 13.5px; }
   .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tag.ex { border-color: var(--accent); color: var(--accent); }
 </style>
@@ -98,7 +99,7 @@
     <section class="card">
       <canvas id="plot" aria-label="Scatter plot of points colored by cluster"></canvas>
       <div class="status">
-        <div><b id="sIter">0</b><span>iteration</span></div>
+        <div><b id="sIter">0</b><span>round</span></div>
         <div><b id="sK">0</b><span>exemplars (clusters)</span></div>
         <div><b id="sConv">-</b><span>status</span></div>
       </div>
@@ -129,10 +130,12 @@
         <label class="check"><input type="checkbox" id="evidence"> Show exemplar evidence r(k,k)+a(k,k)</label>
 
         <div class="row">
-          <button class="primary" id="play">▶ Watch messages</button>
-          <button id="stepBtn">Step</button>
-          <button id="finish">Jump to result</button>
+          <button class="primary" id="play" title="Run rounds of votes and replies, about 14 per second">▶ Play rounds</button>
+          <button id="stepBtn" title="One round: every voter updates its votes (R), then every candidate replies (A)">Step: one round</button>
+          <button id="reset" title="Clear all votes and replies and go back to round 0">Reset to round 0</button>
+          <button id="finish" title="Run rounds until the elected set stops changing">Jump to result</button>
         </div>
+        <p class="log" id="log" aria-live="polite"></p>
       </section>
 
       <section class="card">
@@ -355,7 +358,11 @@ function newRun(instant) {
   stop();
   ap = new AP(sim, prefValue());
   colorOf.clear();
-  if (instant) ap.run(lambda());
+  if (instant) {
+    ap.run(lambda());
+    setLog(`Showing the result after ${ap.iter} rounds: ${plural(ap.ex.length, "candidate")} elected. ` +
+           `Reset to round 0, then Step to follow the election one round at a time.`);
+  }
   render();
 }
 
@@ -558,7 +565,7 @@ function drawCell() {
   if (!s) {
     box.innerHTML = `<h3>Pick a cell</h3><p class="note">Point at the heatmap to see one entry worked out with the current numbers. ` +
       `Rows are voters <i>i</i>, columns are candidates <i>k</i>; the diagonal is each point voting on itself.</p>` +
-      `<p class="note">Iteration ${ap.iter}${ap.iter ? "" : ": no votes yet, so R and A are zero. Press Step or Watch messages to start the rounds."}</p>`;
+      `<p class="note">Round ${ap.iter}${ap.iter ? "" : ": no votes yet, so R and A are zero. Press Step: one round, or Play rounds."}</p>`;
     return;
   }
   const { i, k } = s, { N, S, R, A } = ap, lam = lambda(), o = i * N + k, lab = ap.labels();
@@ -620,7 +627,7 @@ function drawCell() {
       : `Row ${i} is #${i}'s ballot: vote plus reply for every candidate. Its top choice right now is #${top.k} (${fmt(top.v)}), marked with the grey box.`;
   }
   box.innerHTML = `<h3>${esc(title)}${pinned ? ' <span class="tag">pinned</span>' : ""}</h3>` +
-    `<p class="who">voter i = ${pt(i)}<br>candidate k = ${pt(k)}<br>exemplar of i: ${lab[i] < 0 ? "none" : "#" + lab[i]} · iteration ${ap.iter}</p>` +
+    `<p class="who">voter i = ${pt(i)}<br>candidate k = ${pt(k)}<br>exemplar of i: ${lab[i] < 0 ? "none" : "#" + lab[i]} · round ${ap.iter}</p>` +
     `<p class="say">${esc(say)}</p><div class="eq">${esc(lines)}</div>`;
 }
 function matrixCellAt(e) {
@@ -669,7 +676,7 @@ function render() {
   const m = prefMult();
   $("prefVal").textContent = `${prefValue().toFixed(3)}  (median × ${m.toFixed(m < 0.1 ? 3 : 2)})`;
   $("dampVal").textContent = lambda().toFixed(2);
-  $("play").textContent = timer ? "❚❚ Pause" : "▶ Watch messages";
+  $("play").textContent = timer ? "❚❚ Pause" : "▶ Play rounds";
 }
 
 // sweep is computed in small chunks so the page stays responsive
@@ -690,12 +697,33 @@ function computeSweep() {
 }
 
 // ---------- controls ----------
+function setLog(t) { $("log").textContent = t; }
+function plural(n, w) { return `${n} ${w}${n === 1 ? "" : "s"}`; }
+const names = ks => ks.length > 6 ? plural(ks.length, "point") : ks.map(k => "#" + k).join(", ");
+// one round of the election, with a plain-language account of what changed
+function stepOnce() {
+  const before = new Set(ap.ex);
+  ap.step(lambda());
+  const now = ap.ex, gained = now.filter(k => !before.has(k)), lost = [...before].filter(k => !now.includes(k));
+  let t = `Round ${ap.iter}: every voter re-scored each candidate against its best alternative (votes, R), ` +
+          `then every candidate told each voter how much backing it has (replies, A), both damped by λ = ${lambda().toFixed(2)}. `;
+  t += now.length ? `${plural(now.length, "candidate")} elected now (self-vote + backing > 0)` : "No candidate is elected yet (no self-vote + backing above 0)";
+  if (gained.length || lost.length)
+    t += [gained.length && `newly elected: ${names(gained)}`, lost.length && `dropped: ${names(lost)}`].filter(Boolean).map(x => "; " + x).join("");
+  else if (ap.iter > 1 && now.length) t += `, unchanged for ${plural(ap.stable, "round")}`;
+  t += ap.converged ? ". Converged: the elected set has held for 20 rounds." : ".";
+  setLog(t);
+}
+function resetRun() {
+  stop(); ap = new AP(sim, prefValue()); colorOf.clear();
+  setLog("Round 0: no votes or replies yet, so R and A are all zero and nobody is elected. Step runs one round.");
+}
 function stop() { if (timer) { clearInterval(timer); timer = null; } }
 function play() {
   if (timer) { stop(); render(); return; }
-  if (ap.converged || ap.iter >= 400) { ap = new AP(sim, prefValue()); colorOf.clear(); }
+  if (ap.converged || ap.iter >= 400) resetRun();
   timer = setInterval(() => {
-    ap.step(lambda());
+    stepOnce();
     if (ap.converged || ap.iter >= 400) stop();
     render();
   }, 70);
@@ -703,8 +731,14 @@ function play() {
 }
 
 $("play").onclick = play;
-$("stepBtn").onclick = () => { stop(); if (ap.converged) { ap = new AP(sim, prefValue()); colorOf.clear(); } ap.step(lambda()); render(); };
-$("finish").onclick = () => { stop(); ap.run(lambda()); render(); };
+$("stepBtn").onclick = () => { stop(); stepOnce(); render(); };
+$("reset").onclick = () => { resetRun(); render(); };
+$("finish").onclick = () => {
+  stop(); const n0 = ap.iter; ap.run(lambda());
+  setLog(`Ran ${plural(ap.iter - n0, "more round")} to round ${ap.iter}: ${plural(ap.ex.length, "candidate")} elected. ` +
+         (ap.converged ? "The elected set held for 20 rounds, so the election stopped." : "Stopped at the 400-round limit without converging; try more damping."));
+  render();
+};
 $("pref").oninput = () => newRun(true);
 $("damp").oninput = () => newRun(true);
 $("evidence").onchange = render;
