@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Affinity Propagation: Inside the Matrices</title>
+<style>
+  :root {
+    --bg: #f7f6f2; --panel: #ffffff; --ink: #1d1f24; --muted: #646a73;
+    --line: #dcdad3; --accent: #2f5fd0; --grid: #ecebe6;
+    /* heatmap: negative values toward --neg, positive toward --pos, zero = panel */
+    --neg: #2f5fd0; --pos: #d9622b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #16181c; --panel: #1f2228; --ink: #e9e9ea; --muted: #9aa0a8;
+            --line: #353a42; --accent: #7aa2ff; --grid: #262a31; --neg: #7aa2ff; --pos: #f08a5d; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg: #16181c; --panel: #1f2228; --ink: #e9e9ea; --muted: #9aa0a8;
+          --line: #353a42; --accent: #7aa2ff; --grid: #262a31; --neg: #7aa2ff; --pos: #f08a5d; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding-block: 20px 32px;
+         padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1 { font-size: 24px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  #plot { width: 100%; aspect-ratio: 1 / 1; display: block; border-radius: 6px; cursor: crosshair; }
+  .status { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .status b { font-size: 20px; }
+  .status span { color: var(--muted); font-size: 13px; display: block; }
+  .side { display: flex; flex-direction: column; gap: 16px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 10px 0 2px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  .val { float: right; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button, select { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 6px;
+                   border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .check { font-weight: 400; display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  canvas.chart { width: 100%; height: 150px; display: block; cursor: pointer; }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  .explain p { margin: 0 0 8px; }
+  .explain code { font-size: 13px; }
+  .eq { background: var(--bg); border-radius: 6px; padding: 8px 10px; font: 13px/1.6 ui-monospace, Menlo, Consolas, monospace; margin: 6px 0 10px; overflow-x: auto; }
+
+  /* ---- matrices section */
+  .matrices { margin-top: 16px; }
+  .matrices > h2 { font-size: 18px; margin: 0 0 4px; }
+  .matrices > .lede { color: var(--muted); margin: 0 0 12px; max-width: 70ch; }
+  .pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .pipeline { grid-template-columns: 1fr; } }
+  .pipeline .card { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pipeline h3 { font-size: 14px; margin: 0; }
+  .pipeline h3 .from { color: var(--muted); font-weight: 400; }
+  .pipeline p { margin: 0; font-size: 13.5px; }
+  .pipeline .eq { margin: 0; white-space: pre; font-size: 12px; }
+  .mgrid { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .mgrid { grid-template-columns: minmax(0, 1fr); } }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; flex-wrap: wrap; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+  #matrix { width: 100%; aspect-ratio: 1 / 1; display: block; margin-top: 10px; cursor: crosshair; touch-action: none; }
+  .legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .legend canvas { width: 140px; height: 10px; border-radius: 3px; }
+  .cell h3 { font-size: 15px; margin: 0 0 6px; }
+  .cell .who { color: var(--muted); font-size: 13px; margin: 0 0 8px; font-variant-numeric: tabular-nums; }
+  .cell .eq { white-space: pre; }
+  .cell .note { font-size: 13.5px; margin: 0 0 8px; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.ex { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Affinity Propagation</h1>
+  <p class="sub">Points send messages to each other until a few of them are chosen as <b>exemplars</b>: real data points that represent their clusters. You never pick K.</p>
+
+  <div class="layout">
+    <section class="card">
+      <canvas id="plot" aria-label="Scatter plot of points colored by cluster"></canvas>
+      <div class="status">
+        <div><b id="sIter">0</b><span>iteration</span></div>
+        <div><b id="sK">0</b><span>exemplars (clusters)</span></div>
+        <div><b id="sConv">-</b><span>status</span></div>
+      </div>
+      <p class="hint">Large ringed points are exemplars; thin lines join each point to its exemplar. Click the plot to add a point.</p>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h2>Controls</h2>
+        <label for="dataset">Dataset</label>
+        <div class="row" style="margin-top:2px">
+          <select id="dataset">
+            <option value="blobs">Four blobs</option>
+            <option value="uneven">Uneven blobs</option>
+            <option value="moons">Two moons</option>
+          </select>
+          <button id="resample">New sample</button>
+        </div>
+
+        <label for="pref">Preference <span class="val" id="prefVal"></span></label>
+        <input type="range" id="pref" min="-1.5" max="1.5" step="0.05" value="0">
+        <div class="ends"><span>fewer clusters</span><span>median</span><span>more clusters</span></div>
+
+        <label for="damp">Damping λ <span class="val" id="dampVal"></span></label>
+        <input type="range" id="damp" min="0.5" max="0.95" step="0.05" value="0.7">
+        <div class="ends"><span>fast, may oscillate</span><span>slow, stable</span></div>
+
+        <label class="check"><input type="checkbox" id="evidence"> Show exemplar evidence r(k,k)+a(k,k)</label>
+
+        <div class="row">
+          <button class="primary" id="play">▶ Watch messages</button>
+          <button id="stepBtn">Step</button>
+          <button id="finish">Jump to result</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Clusters vs. preference</h2>
+        <canvas class="chart" id="sweep"></canvas>
+        <p class="hint">Each dot is a full run at that preference. Click to jump there.</p>
+      </section>
+
+      <section class="card explain">
+        <h2>How it works</h2>
+        <p>Similarity is <code>s(i,k) = −‖xᵢ − xₖ‖²</code>. The diagonal <code>s(k,k)</code> is the <b>preference</b>: how willing each point is to be an exemplar.</p>
+        <div class="eq">r(i,k) ← s(i,k) − max<sub>k′≠k</sub>[a(i,k′) + s(i,k′)]<br>a(i,k) ← min(0, r(k,k) + Σ<sub>i′∉{i,k}</sub> max(0, r(i′,k)))</div>
+        <p><b>Responsibility</b> r(i,k): point i tells k how much better k suits it than its best alternative. <b>Availability</b> a(i,k): k tells i how much support it has from other points. Points where <code>r(k,k)+a(k,k) &gt; 0</code> become exemplars. Damping λ blends old and new messages to stop oscillation.</p>
+        <p>Higher preference gives more exemplars. Like k-means, it favors compact, roundish clusters (try <i>Two moons</i>), and it stores N² messages.</p>
+      </section>
+    </aside>
+  </div>
+
+  <section class="matrices" aria-labelledby="mtitle">
+    <h2 id="mtitle">Inside the matrices</h2>
+    <p class="lede">Everything comes from one N × N similarity matrix. Distance is used once, to fill S. Responsibility and availability are then sums, differences and maxima of S and of each other, so every value below is in units of squared distance.</p>
+
+    <div class="pipeline">
+      <div class="card">
+        <h3>S, similarity <span class="from">from the points</span></h3>
+        <div class="eq">s(i,k) = −‖xᵢ − xₖ‖²
+s(k,k) = p</div>
+        <p>Fixed for the whole run. The diagonal is the preference p, set here from the median off-diagonal similarity.</p>
+      </div>
+      <div class="card">
+        <h3>R, responsibility <span class="from">from S and A</span></h3>
+        <div class="eq">r(i,k) ← s(i,k)
+  − max<sub>k′≠k</sub>[a(i,k′) + s(i,k′)]</div>
+        <p>Sent from i to k: how much better k suits i than i's best alternative. With A = 0 it is just the gap to i's runner-up.</p>
+      </div>
+      <div class="card">
+        <h3>A, availability <span class="from">from R</span></h3>
+        <div class="eq">a(i,k) ← min(0, r(k,k)
+  + Σ<sub>i′∉{i,k}</sub> max(0, r(i′,k)))
+a(k,k) ← Σ<sub>i′≠k</sub> max(0, r(i′,k))</div>
+        <p>Sent from k to i: how much support k has. Only positive responsibilities count.</p>
+      </div>
+      <div class="card">
+        <h3>Decision <span class="from">from R + A</span></h3>
+        <div class="eq">exemplar k ⇔ r(k,k) + a(k,k) &gt; 0
+m ← λ·m<sub>old</sub> + (1−λ)·m<sub>new</sub></div>
+        <p>The diagonal of R + A is the evidence shown as halos. Every message is damped by λ before it is stored.</p>
+      </div>
+    </div>
+
+    <div class="mgrid">
+      <div class="card">
+        <div class="seg" role="group" aria-label="Matrix to show">
+          <button id="mS" data-m="S" aria-pressed="true">S</button>
+          <button id="mR" data-m="R" aria-pressed="false">R</button>
+          <button id="mA" data-m="A" aria-pressed="false">A</button>
+          <button id="mE" data-m="E" aria-pressed="false">R + A</button>
+        </div>
+        <label class="check"><input type="checkbox" id="msort" checked> Group rows and columns by cluster</label>
+        <canvas id="matrix" aria-label="Heatmap of the selected matrix; rows are points i, columns are candidates k"></canvas>
+        <div class="legend"><span id="lmin"></span><canvas id="lbar" width="140" height="10"></canvas><span id="lmax"></span><span id="lnote"></span></div>
+        <p class="hint">Rows are points i, columns are candidates k. Point at a cell to see how it is computed; click to pin it. Steps of the demo above update the matrix live.</p>
+      </div>
+      <div class="card cell" id="cell" aria-live="polite"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ---------- data ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function gauss(rng) {
+  let u = 0; while (u === 0) u = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
+}
+function blob(rng, out, cx, cy, sd, n) {
+  for (let j = 0; j < n; j++) out.push([cx + sd * gauss(rng), cy + sd * gauss(rng)]);
+}
+function makeData(kind, seed) {
+  const rng = mulberry32(seed), p = [];
+  if (kind === "blobs") {
+    blob(rng, p, 0.25, 0.30, 0.06, 22); blob(rng, p, 0.72, 0.25, 0.06, 22);
+    blob(rng, p, 0.45, 0.74, 0.06, 22); blob(rng, p, 0.82, 0.72, 0.05, 18);
+  } else if (kind === "uneven") {
+    blob(rng, p, 0.32, 0.45, 0.10, 44); blob(rng, p, 0.78, 0.24, 0.03, 10);
+    blob(rng, p, 0.82, 0.70, 0.03, 10); blob(rng, p, 0.55, 0.85, 0.045, 18);
+  } else {
+    for (let j = 0; j < 80; j++) {
+      const t = Math.PI * rng(), up = j % 2 === 0;
+      const x = up ? Math.cos(t) : 1 - Math.cos(t);
+      const y = up ? Math.sin(t) : 0.5 - Math.sin(t);
+      p.push([0.36 + 0.28 * x + 0.025 * gauss(rng), 0.62 - 0.3 * y + 0.025 * gauss(rng)]);
+    }
+  }
+  return p;
+}
+
+// ---------- affinity propagation ----------
+function similarities(pts) {
+  const N = pts.length, S = new Float64Array(N * N), off = [];
+  for (let i = 0; i < N; i++) for (let k = 0; k < N; k++) {
+    const dx = pts[i][0] - pts[k][0], dy = pts[i][1] - pts[k][1];
+    S[i * N + k] = -(dx * dx + dy * dy);
+    if (i < k) off.push(S[i * N + k]);
+  }
+  off.sort((a, b) => a - b);
+  const median = off.length ? off[Math.floor(off.length / 2)] : -1;
+  // tiny deterministic noise breaks ties between symmetric candidates
+  const rng = mulberry32(7);
+  for (let j = 0; j < S.length; j++) S[j] += 1e-9 * (rng() - 0.5);
+  return { S, median, N };
+}
+
+class AP {
+  constructor(sim, pref) {
+    this.N = sim.N; this.S = Float64Array.from(sim.S);
+    for (let k = 0; k < this.N; k++) this.S[k * this.N + k] = pref;
+    this.R = new Float64Array(this.N * this.N);
+    this.A = new Float64Array(this.N * this.N);
+    this.iter = 0; this.stable = 0; this.sig = ""; this.ex = []; this.converged = false;
+    this.history = [];
+  }
+  step(lam) {
+    const { N, S, R, A } = this;
+    for (let i = 0; i < N; i++) {
+      const o = i * N; let m1 = -Infinity, m2 = -Infinity, idx = -1;
+      for (let k = 0; k < N; k++) {
+        const v = A[o + k] + S[o + k];
+        if (v > m1) { m2 = m1; m1 = v; idx = k; } else if (v > m2) m2 = v;
+      }
+      for (let k = 0; k < N; k++) {
+        const rn = S[o + k] - (k === idx ? m2 : m1);
+        R[o + k] = lam * R[o + k] + (1 - lam) * rn;
+      }
+    }
+    for (let k = 0; k < N; k++) {
+      let pos = 0;
+      for (let i = 0; i < N; i++) if (i !== k && R[i * N + k] > 0) pos += R[i * N + k];
+      const rkk = R[k * N + k];
+      for (let i = 0; i < N; i++) {
+        const an = i === k ? pos : Math.min(0, rkk + pos - Math.max(0, R[i * N + k]));
+        A[i * N + k] = lam * A[i * N + k] + (1 - lam) * an;
+      }
+    }
+    this.iter++;
+    this.ex = [];
+    for (let k = 0; k < N; k++) if (this.evidence(k) > 0) this.ex.push(k);
+    const sig = this.ex.join(",");
+    this.stable = sig === this.sig ? this.stable + 1 : 0;
+    this.sig = sig;
+    if (this.ex.length > 0 && this.stable >= 20) this.converged = true;
+    this.history.push(this.ex.length);
+  }
+  evidence(k) { return this.R[k * this.N + k] + this.A[k * this.N + k]; }
+  run(lam, maxIter = 400) {
+    while (!this.converged && this.iter < maxIter) this.step(lam);
+    return this;
+  }
+  labels() {
+    const { N, S, ex } = this, lab = new Int32Array(N).fill(-1);
+    if (!ex.length) return lab;
+    for (let i = 0; i < N; i++) {
+      let best = -Infinity;
+      for (const k of ex) {
+        const v = k === i ? Infinity : S[i * N + k];
+        if (v > best) { best = v; lab[i] = k; }
+      }
+    }
+    return lab;
+  }
+}
+
+// ---------- state ----------
+const PALETTE = ["#2f6fdb", "#e0663a", "#1a9e77", "#c6409a", "#8a63d2", "#c9a227",
+                 "#3aa6c4", "#d1495b", "#5b8c2a", "#8c5a3c", "#6b7a8f", "#e08ab3"];
+const $ = id => document.getElementById(id);
+let kind = "blobs", seed = 1, pts = [], sim = null, ap = null, timer = null;
+let colorOf = new Map(), sweep = [], sweepToken = 0;
+
+const prefMult = () => Math.pow(10, -parseFloat($("pref").value));
+const prefValue = () => sim.median * prefMult();
+const lambda = () => parseFloat($("damp").value);
+
+function assignColors() {
+  const live = new Set(ap.ex);
+  for (const k of [...colorOf.keys()]) if (!live.has(k)) colorOf.delete(k);
+  const used = new Set(colorOf.values());
+  for (const k of ap.ex) if (!colorOf.has(k)) {
+    let c = 0; while (used.has(c) && c < PALETTE.length) c++;
+    if (c >= PALETTE.length) c = k % PALETTE.length;
+    colorOf.set(k, c); used.add(c);
+  }
+}
+
+function newRun(instant) {
+  stop();
+  ap = new AP(sim, prefValue());
+  colorOf.clear();
+  if (instant) ap.run(lambda());
+  render();
+}
+
+function newData() {
+  pts = makeData(kind, seed);
+  sim = similarities(pts);
+  newRun(true);
+  computeSweep();
+}
+
+// ---------- drawing ----------
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * d), h = Math.round(r.height * d);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext("2d"); g.setTransform(d, 0, 0, d, 0, 0);
+  return [g, r.width, r.height];
+}
+
+function drawPlot() {
+  const [g, W, H] = fitCanvas($("plot"));
+  g.fillStyle = css("--panel"); g.fillRect(0, 0, W, H);
+  const pad = 14, sx = x => pad + x * (W - 2 * pad), sy = y => pad + y * (H - 2 * pad);
+  g.strokeStyle = css("--grid"); g.lineWidth = 1;
+  for (let t = 0; t <= 10; t++) {
+    g.beginPath(); g.moveTo(sx(t / 10), sy(0)); g.lineTo(sx(t / 10), sy(1)); g.stroke();
+    g.beginPath(); g.moveTo(sx(0), sy(t / 10)); g.lineTo(sx(1), sy(t / 10)); g.stroke();
+  }
+  assignColors();
+  const lab = ap.labels(), col = k => PALETTE[colorOf.get(k) ?? 0], ink = css("--ink");
+
+  if ($("evidence").checked) {
+    // halo size ranks each point between the weakest and strongest candidate
+    let lo = Infinity, hi = -Infinity;
+    for (let k = 0; k < pts.length; k++) { const e = ap.evidence(k); lo = Math.min(lo, e); hi = Math.max(hi, e); }
+    for (let k = 0; k < pts.length; k++) {
+      const e = ap.evidence(k), t = hi > lo ? (e - lo) / (hi - lo) : 0;
+      const r = 5 + 20 * t * t;
+      g.beginPath(); g.arc(sx(pts[k][0]), sy(pts[k][1]), r, 0, 2 * Math.PI);
+      g.fillStyle = e > 0 ? "rgba(47,95,208,0.30)" : `rgba(120,128,140,${0.08 + 0.25 * t})`; g.fill();
+    }
+  }
+
+  g.lineWidth = 1.2; g.globalAlpha = 0.45;
+  for (let i = 0; i < pts.length; i++) {
+    const k = lab[i]; if (k < 0 || k === i) continue;
+    g.strokeStyle = col(k);
+    g.beginPath(); g.moveTo(sx(pts[i][0]), sy(pts[i][1])); g.lineTo(sx(pts[k][0]), sy(pts[k][1])); g.stroke();
+  }
+  g.globalAlpha = 1;
+  for (let i = 0; i < pts.length; i++) {
+    g.beginPath(); g.arc(sx(pts[i][0]), sy(pts[i][1]), 4.5, 0, 2 * Math.PI);
+    g.fillStyle = lab[i] < 0 ? css("--muted") : col(lab[i]); g.fill();
+  }
+  for (const k of ap.ex) {
+    const x = sx(pts[k][0]), y = sy(pts[k][1]);
+    g.beginPath(); g.arc(x, y, 9, 0, 2 * Math.PI); g.fillStyle = col(k); g.fill();
+    g.lineWidth = 2.5; g.strokeStyle = ink; g.stroke();
+    g.beginPath(); g.arc(x, y, 14, 0, 2 * Math.PI); g.lineWidth = 1.5; g.strokeStyle = col(k); g.stroke();
+  }
+
+  // the matrix cell under the pointer: mark point i and candidate k
+  const c = cellSel();
+  if (c) {
+    const [xi, yi] = [sx(pts[c.i][0]), sy(pts[c.i][1])], [xk, yk] = [sx(pts[c.k][0]), sy(pts[c.k][1])];
+    g.setLineDash([4, 3]); g.lineWidth = 1.5; g.strokeStyle = ink;
+    g.beginPath(); g.moveTo(xi, yi); g.lineTo(xk, yk); g.stroke(); g.setLineDash([]);
+    for (const [x, y, t] of c.i === c.k ? [[xi, yi, "i = k"]] : [[xi, yi, "i"], [xk, yk, "k"]]) {
+      g.beginPath(); g.arc(x, y, 18, 0, 2 * Math.PI); g.lineWidth = 2; g.strokeStyle = ink; g.stroke();
+      g.font = "bold 13px system-ui, sans-serif"; g.fillStyle = ink; g.textAlign = "left";
+      g.fillText(t, x + 20, y - 12);
+    }
+  }
+}
+
+// ---------- matrices ----------
+let mview = "S", hover = null, pinned = null;
+const cellSel = () => {
+  const c = pinned || hover;
+  return c && ap && c.i < ap.N && c.k < ap.N ? c : null;
+};
+const fmt = v => {
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  return (a < 1e-3 ? v.toExponential(2) : a < 10 ? v.toFixed(4) : v.toFixed(2)).replace("-", "−");
+};
+const par = v => v < 0 ? `(${fmt(v)})` : fmt(v);   // negative terms inside an expression
+function hexRgb(h) {
+  h = h.replace("#", "");
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  return [0, 2, 4].map(j => parseInt(h.slice(j, j + 2), 16));
+}
+const mix = (a, b, t) => `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * t)).join(",")})`;
+
+function mval(i, k) {
+  const { N, S, R, A } = ap, o = i * N + k;
+  return mview === "S" ? S[o] : mview === "R" ? R[o] : mview === "A" ? A[o] : R[o] + A[o];
+}
+// rows/columns grouped by cluster, exemplar first in each block
+function matrixOrder() {
+  const N = ap.N, idx = [...Array(N).keys()];
+  if (!$("msort").checked || !ap.ex.length) return { order: idx, cuts: [] };
+  const lab = ap.labels(), rank = new Map(ap.ex.map((k, j) => [k, j]));
+  idx.sort((a, b) => (rank.get(lab[a]) ?? 1e9) - (rank.get(lab[b]) ?? 1e9) ||
+                     (b === lab[b]) - (a === lab[a]) || a - b);
+  const cuts = [];
+  for (let j = 1; j < N; j++) if (lab[idx[j]] !== lab[idx[j - 1]]) cuts.push(j);
+  return { order: idx, cuts };
+}
+function scaleMax() {
+  const N = ap.N, v = [];
+  for (let i = 0; i < N; i++) for (let k = 0; k < N; k++) v.push(Math.abs(mval(i, k)));
+  v.sort((a, b) => a - b);
+  return Math.max(v[Math.floor(0.98 * (v.length - 1))], 1e-12);
+}
+function cellColor(v, vmax, P, NEG, POS) {
+  if (mview === "S") {               // similarity: strongest where points are close (s near 0)
+    const t = Math.max(0, 1 - Math.abs(v) / vmax);
+    return mix(P, NEG, t * t);
+  }
+  const t = Math.min(1, Math.sqrt(Math.abs(v) / vmax));
+  return mix(P, v < 0 ? NEG : POS, t);
+}
+function drawMatrix() {
+  const [g, W] = fitCanvas($("matrix"));
+  const P = hexRgb(css("--panel")), NEG = hexRgb(css("--neg")), POS = hexRgb(css("--pos"));
+  g.fillStyle = css("--panel"); g.fillRect(0, 0, W, W);
+  const { order, cuts } = matrixOrder(), N = ap.N, M = 16, cs = (W - M) / N;
+  const vmax = scaleMax();
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    g.fillStyle = cellColor(mval(order[r], order[c]), vmax, P, NEG, POS);
+    g.fillRect(M + c * cs, M + r * cs, Math.ceil(cs), Math.ceil(cs));
+  }
+  g.strokeStyle = css("--ink"); g.globalAlpha = 0.35; g.lineWidth = 1;
+  for (const j of cuts) {
+    g.beginPath(); g.moveTo(M + j * cs, M); g.lineTo(M + j * cs, W); g.stroke();
+    g.beginPath(); g.moveTo(M, M + j * cs); g.lineTo(W, M + j * cs); g.stroke();
+  }
+  g.globalAlpha = 1;
+  g.font = "11px system-ui, sans-serif"; g.fillStyle = css("--muted");
+  g.textAlign = "left"; g.fillText("k →", M, 11);
+  g.save(); g.translate(11, M); g.rotate(Math.PI / 2); g.fillText("i →", 0, 0); g.restore();
+  const s = cellSel();
+  if (s) {
+    const r = order.indexOf(s.i), c = order.indexOf(s.k);
+    g.strokeStyle = css("--ink"); g.lineWidth = 2;
+    g.strokeRect(M + c * cs - 2, M + r * cs - 2, cs + 4, cs + 4);
+  }
+  $("matrix")._map = { order, M, cs, N };
+  // legend
+  const lb = $("lbar"), lg = lb.getContext("2d");
+  for (let x = 0; x < lb.width; x++) {
+    const v = mview === "S" ? -vmax * (1 - x / (lb.width - 1)) : vmax * (2 * x / (lb.width - 1) - 1);
+    lg.fillStyle = cellColor(v, vmax, P, NEG, POS); lg.fillRect(x, 0, 1, lb.height);
+  }
+  $("lmin").textContent = fmt(-vmax);
+  $("lmax").textContent = mview === "S" ? "0" : fmt(vmax);
+  $("lnote").textContent = mview === "S" ? "(darker = closer)" : "(98th-percentile scale; values beyond it saturate)";
+  drawCell();
+}
+
+function esc(t) { return String(t).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]); }
+function drawCell() {
+  const box = $("cell"), s = cellSel();
+  if (!s) {
+    box.innerHTML = `<h3>Pick a cell</h3><p class="note">Point at the heatmap to see one entry worked out with the current numbers. ` +
+      `Rows are points <i>i</i>, columns are candidates <i>k</i>; the diagonal holds each point's view of itself.</p>` +
+      `<p class="note">Iteration ${ap.iter}${ap.iter ? "" : ": R and A are still zero. Press Step or Watch messages to fill them."}</p>`;
+    return;
+  }
+  const { i, k } = s, { N, S, R, A } = ap, lam = lambda(), o = i * N + k, lab = ap.labels();
+  const isEx = j => ap.ex.includes(j);
+  const pt = j => `#${j} (${pts[j][0].toFixed(3)}, ${pts[j][1].toFixed(3)})${isEx(j) ? ' <span class="tag ex">exemplar</span>' : ""}`;
+  let title, lines, note = "";
+  if (mview === "S") {
+    if (i === k) {
+      title = `s(${k},${k}): preference`;
+      lines = `s(k,k) = p = median × ${prefMult().toFixed(3)}\n       = ${par(sim.median)} × ${prefMult().toFixed(3)}\n       = ${fmt(S[o])}`;
+      note = "Every point gets the same preference here. Raise it and more points can afford to be exemplars.";
+    } else {
+      const dx = pts[i][0] - pts[k][0], dy = pts[i][1] - pts[k][1];
+      title = `s(${i},${k}): similarity`;
+      lines = `s(i,k) = −(Δx² + Δy²)\n       = −(${par(dx)}² + ${par(dy)}²)\n       = ${fmt(S[o])}`;
+      note = "The only formula that touches coordinates. A tiny fixed noise (about 1e-9) breaks exact ties.";
+    }
+  } else if (mview === "R") {
+    let best = -Infinity, kb = -1;
+    for (let kk = 0; kk < N; kk++) if (kk !== k && A[i * N + kk] + S[i * N + kk] > best) { best = A[i * N + kk] + S[i * N + kk]; kb = kk; }
+    const rn = S[o] - best;
+    title = `r(${i},${k}): responsibility`;
+    lines = `r(i,k) ← s(i,k) − max_{k′≠k}[a(i,k′) + s(i,k′)]\n` +
+            `best rival k′ = #${kb}: a = ${fmt(A[i * N + kb])}, s = ${fmt(S[i * N + kb])}\n` +
+            `new    = ${fmt(S[o])} − (${fmt(best)}) = ${fmt(rn)}\n` +
+            `stored = ${fmt(R[o])}\n` +
+            `next   = ${lam.toFixed(2)}·${par(R[o])} + ${(1 - lam).toFixed(2)}·${par(rn)} = ${fmt(lam * R[o] + (1 - lam) * rn)}`;
+    note = i === k ? "Self-responsibility: the preference minus how well another candidate could represent this point."
+                   : rn > 0 ? `Positive: #${k} beats every alternative for point #${i}.` : `Negative: point #${i} has a better option than #${k}.`;
+  } else if (mview === "A") {
+    let pos = 0, n = 0;
+    for (let ii = 0; ii < N; ii++) if (ii !== k && ii !== i && R[ii * N + k] > 0) { pos += R[ii * N + k]; n++; }
+    if (i === k) {
+      title = `a(${k},${k}): self-availability`;
+      lines = `a(k,k) ← Σ_{i′≠k} max(0, r(i′,k))\n` +
+              `new    = ${fmt(pos)}   (${n} supporter${n === 1 ? "" : "s"})\n` +
+              `stored = ${fmt(A[o])}\n` +
+              `next   = ${lam.toFixed(2)}·${par(A[o])} + ${(1 - lam).toFixed(2)}·${par(pos)} = ${fmt(lam * A[o] + (1 - lam) * pos)}`;
+      note = "The total positive responsibility that other points send to this candidate.";
+    } else {
+      const rkk = R[k * N + k], an = Math.min(0, rkk + pos);
+      title = `a(${i},${k}): availability`;
+      lines = `a(i,k) ← min(0, r(k,k) + Σ_{i′∉{i,k}} max(0, r(i′,k)))\n` +
+              `r(k,k) = ${fmt(rkk)};  Σ = ${fmt(pos)}  (${n} supporter${n === 1 ? "" : "s"})\n` +
+              `new    = min(0, ${fmt(rkk + pos)}) = ${fmt(an)}\n` +
+              `stored = ${fmt(A[o])}\n` +
+              `next   = ${lam.toFixed(2)}·${par(A[o])} + ${(1 - lam).toFixed(2)}·${par(an)} = ${fmt(lam * A[o] + (1 - lam) * an)}`;
+      note = an < 0 ? `Capped below zero: #${k} lacks enough support to look available to #${i}.`
+                    : `Zero, the most it can be: #${k} has enough support (the min(0, ·) cap applies).`;
+    }
+  } else {
+    title = i === k ? `r(${k},${k}) + a(${k},${k}): evidence` : `r(${i},${k}) + a(${i},${k})`;
+    lines = `r + a = ${fmt(R[o])} + ${par(A[o])}\n      = ${fmt(R[o] + A[o])}`;
+    note = i === k ? (R[o] + A[o] > 0 ? `Positive, so #${k} is an exemplar.` : `Not positive, so #${k} is not an exemplar.`)
+                   : `Row i of R + A is point #${i}'s scorecard; its largest entry is the candidate it leans toward.`;
+  }
+  box.innerHTML = `<h3>${esc(title)}${pinned ? ' <span class="tag">pinned</span>' : ""}</h3>` +
+    `<p class="who">i = ${pt(i)}<br>k = ${pt(k)}<br>exemplar of i: ${lab[i] < 0 ? "none" : "#" + lab[i]} · iteration ${ap.iter}</p>` +
+    `<div class="eq">${esc(lines)}</div><p class="note">${esc(note)}</p>`;
+}
+function matrixCellAt(e) {
+  const m = $("matrix")._map; if (!m) return null;
+  const r = $("matrix").getBoundingClientRect();
+  const c = Math.floor((e.clientX - r.left - m.M) / m.cs), w = Math.floor((e.clientY - r.top - m.M) / m.cs);
+  if (c < 0 || w < 0 || c >= m.N || w >= m.N) return null;
+  return { i: m.order[w], k: m.order[c] };
+}
+
+function drawSweep() {
+  const [g, W, H] = fitCanvas($("sweep"));
+  g.fillStyle = css("--panel"); g.fillRect(0, 0, W, H);
+  const L = 30, Rm = 8, T = 8, B = 22;
+  const vmin = -1.5, vmax = 1.5;
+  const ymax = Math.max(4, ...sweep.map(s => s.k)) + 1;
+  const X = v => L + (v - vmin) / (vmax - vmin) * (W - L - Rm), Y = k => H - B - k / ymax * (H - T - B);
+  g.font = "11px system-ui, sans-serif"; g.fillStyle = css("--muted"); g.strokeStyle = css("--grid");
+  const ystep = ymax > 16 ? 5 : ymax > 8 ? 2 : 1;
+  for (let k = 0; k <= ymax; k += ystep) {
+    g.beginPath(); g.moveTo(L, Y(k)); g.lineTo(W - Rm, Y(k)); g.stroke();
+    g.textAlign = "right"; g.fillText(k, L - 5, Y(k) + 4);
+  }
+  g.textAlign = "center";
+  g.fillText("fewer ←  preference  → more", (L + W - Rm) / 2, H - 6);
+  const v = parseFloat($("pref").value);
+  g.strokeStyle = css("--accent"); g.lineWidth = 1.5; g.setLineDash([4, 3]);
+  g.beginPath(); g.moveTo(X(v), T); g.lineTo(X(v), H - B); g.stroke(); g.setLineDash([]);
+  if (sweep.length) {
+    g.strokeStyle = css("--ink"); g.lineWidth = 1.5; g.beginPath();
+    sweep.forEach((s, j) => { if (j === 0) g.moveTo(X(s.v), Y(s.k)); else { g.lineTo(X(s.v), Y(sweep[j - 1].k)); g.lineTo(X(s.v), Y(s.k)); } });
+    g.stroke();
+    g.fillStyle = css("--ink");
+    for (const s of sweep) { g.beginPath(); g.arc(X(s.v), Y(s.k), 2.5, 0, 2 * Math.PI); g.fill(); }
+  } else {
+    g.fillText("computing…", (L + W) / 2, H / 2);
+  }
+  $("sweep")._map = { X, L, W, Rm, vmin, vmax };
+}
+
+function render() {
+  drawPlot(); drawSweep(); drawMatrix();
+  $("sIter").textContent = ap.iter;
+  $("sK").textContent = ap.ex.length;
+  $("sConv").textContent = ap.converged ? "converged" : ap.iter ? "running" : "not started";
+  const m = prefMult();
+  $("prefVal").textContent = `${prefValue().toFixed(3)}  (median × ${m.toFixed(m < 0.1 ? 3 : 2)})`;
+  $("dampVal").textContent = lambda().toFixed(2);
+  $("play").textContent = timer ? "❚❚ Pause" : "▶ Watch messages";
+}
+
+// sweep is computed in small chunks so the page stays responsive
+function computeSweep() {
+  const token = ++sweepToken, vals = [];
+  for (let v = -1.5; v <= 1.5001; v += 0.1) vals.push(+v.toFixed(2));
+  sweep = []; let j = 0;
+  (function chunk() {
+    if (token !== sweepToken) return;
+    const t0 = performance.now();
+    while (j < vals.length && performance.now() - t0 < 25) {
+      const r = new AP(sim, sim.median * Math.pow(10, -vals[j])).run(0.7);
+      sweep.push({ v: vals[j], k: r.ex.length }); j++;
+    }
+    drawSweep();
+    if (j < vals.length) setTimeout(chunk, 0);
+  })();
+}
+
+// ---------- controls ----------
+function stop() { if (timer) { clearInterval(timer); timer = null; } }
+function play() {
+  if (timer) { stop(); render(); return; }
+  if (ap.converged || ap.iter >= 400) { ap = new AP(sim, prefValue()); colorOf.clear(); }
+  timer = setInterval(() => {
+    ap.step(lambda());
+    if (ap.converged || ap.iter >= 400) stop();
+    render();
+  }, 70);
+  render();
+}
+
+$("play").onclick = play;
+$("stepBtn").onclick = () => { stop(); if (ap.converged) { ap = new AP(sim, prefValue()); colorOf.clear(); } ap.step(lambda()); render(); };
+$("finish").onclick = () => { stop(); ap.run(lambda()); render(); };
+$("pref").oninput = () => newRun(true);
+$("damp").oninput = () => newRun(true);
+$("evidence").onchange = render;
+$("dataset").onchange = e => { kind = e.target.value; seed = 1; newData(); };
+$("resample").onclick = () => { seed++; newData(); };
+$("sweep").onclick = e => {
+  const m = $("sweep")._map; if (!m) return;
+  const x = e.clientX - $("sweep").getBoundingClientRect().left;
+  const v = m.vmin + (x - m.L) / (m.W - m.L - m.Rm) * (m.vmax - m.vmin);
+  $("pref").value = Math.max(m.vmin, Math.min(m.vmax, Math.round(v / 0.05) * 0.05)).toFixed(2);
+  newRun(true);
+};
+$("plot").onclick = e => {
+  const r = $("plot").getBoundingClientRect(), pad = 14;
+  pts.push([(e.clientX - r.left - pad) / (r.width - 2 * pad), (e.clientY - r.top - pad) / (r.height - 2 * pad)]);
+  sim = similarities(pts);
+  newRun(true); computeSweep();
+};
+for (const b of document.querySelectorAll(".seg button")) b.onclick = () => {
+  mview = b.dataset.m;
+  for (const o of document.querySelectorAll(".seg button")) o.setAttribute("aria-pressed", o === b);
+  render();
+};
+$("msort").onchange = render;
+$("matrix").onpointermove = e => {
+  if (pinned || e.pointerType === "touch") return;
+  const c = matrixCellAt(e);
+  if (c?.i !== hover?.i || c?.k !== hover?.k) { hover = c; drawPlot(); drawMatrix(); }
+};
+$("matrix").onpointerleave = () => { if (!pinned && hover) { hover = null; drawPlot(); drawMatrix(); } };
+$("matrix").onpointerdown = e => {
+  const c = matrixCellAt(e);
+  pinned = c && !(pinned && pinned.i === c.i && pinned.k === c.k) ? c : null;
+  hover = c; drawPlot(); drawMatrix();
+};
+window.addEventListener("resize", render);
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+newData();
+</script>
+</body>
+</html>
