@@ -74,6 +74,17 @@
   .cell .who { color: var(--muted); font-size: 13px; margin: 0 0 8px; font-variant-numeric: tabular-nums; }
   .cell .eq { white-space: pre; }
   .cell .note { font-size: 13.5px; margin: 0 0 8px; }
+  .election { margin-bottom: 16px; }
+  .election > h3 { font-size: 15px; margin: 0 0 2px; }
+  .election > p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+  .election dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 20px; margin: 0; }
+  @media (max-width: 900px) { .election dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .election dl { grid-template-columns: 1fr; } }
+  .election dl > div { min-width: 0; }
+  .election dt { font-weight: 600; font-size: 14px; }
+  .election dt code { font-weight: 400; color: var(--muted); font-size: 12.5px; }
+  .election dd { margin: 2px 0 0; font-size: 13.5px; }
+  .cell .say { font-size: 15px; margin: 0 0 10px; }
   .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .tag.ex { border-color: var(--accent); color: var(--accent); }
 </style>
@@ -144,25 +155,40 @@
     <h2 id="mtitle">Inside the matrices</h2>
     <p class="lede">Everything comes from one N × N similarity matrix. Distance is used once, to fill S. Responsibility and availability are then sums, differences and maxima of S and of each other, so every value below is in units of squared distance.</p>
 
+    <div class="card election">
+      <h3>Read it as an election</h3>
+      <p>Every point is both a voter and a candidate. Rounds of votes and replies repeat until the result stops changing.</p>
+      <dl>
+        <div><dt>Preference <code>s(k,k) = p</code></dt>
+          <dd>How highly each point rates itself as a candidate. Think of −p as the filing fee for running: a high preference (near 0) makes running cheap, so many candidates survive; a very negative one leaves room for only a few.</dd></div>
+        <div><dt>Responsibility, a vote <code>r(i,k)</code></dt>
+          <dd>Voter i tells candidate k how far ahead it is of i's best alternative. Computed across row i: candidates compete for each voter.</dd></div>
+        <div><dt>Availability, a reply <code>a(i,k)</code></dt>
+          <dd>Candidate k tells voter i how much backing it has: its self-vote plus everyone else's positive votes. Computed down column k: voters pool their support. Capped at 0, so a reply can warn a voter off but never bribe one.</dd></div>
+        <div><dt>The count <code>r(k,k) + a(k,k) &gt; 0</code></dt>
+          <dd>A candidate whose self-vote plus backing is positive is elected as an exemplar. Each point then joins the elected candidate it rates highest.</dd></div>
+      </dl>
+    </div>
+
     <div class="pipeline">
       <div class="card">
         <h3>S, similarity <span class="from">from the points</span></h3>
         <div class="eq">s(i,k) = −‖xᵢ − xₖ‖²
 s(k,k) = p</div>
-        <p>Fixed for the whole run. The diagonal is the preference p, set here from the median off-diagonal similarity.</p>
+        <p>Each point's rating of every candidate, fixed for the whole run. The diagonal is the preference p, set here from the median off-diagonal similarity.</p>
       </div>
       <div class="card">
         <h3>R, responsibility <span class="from">from S and A</span></h3>
         <div class="eq">r(i,k) ← s(i,k)
   − max<sub>k′≠k</sub>[a(i,k′) + s(i,k′)]</div>
-        <p>Sent from i to k: how much better k suits i than i's best alternative. With A = 0 it is just the gap to i's runner-up.</p>
+        <p>A vote from i to k: how much better k suits i than i's best alternative. With A = 0 it is just the gap to i's runner-up.</p>
       </div>
       <div class="card">
         <h3>A, availability <span class="from">from R</span></h3>
         <div class="eq">a(i,k) ← min(0, r(k,k)
   + Σ<sub>i′∉{i,k}</sub> max(0, r(i′,k)))
 a(k,k) ← Σ<sub>i′≠k</sub> max(0, r(i′,k))</div>
-        <p>Sent from k to i: how much support k has. Only positive responsibilities count.</p>
+        <p>A reply from k to i: how much backing k has. Only positive votes count.</p>
       </div>
       <div class="card">
         <h3>Decision <span class="from">from R + A</span></h3>
@@ -183,7 +209,7 @@ m ← λ·m<sub>old</sub> + (1−λ)·m<sub>new</sub></div>
         <label class="check"><input type="checkbox" id="msort" checked> Group rows and columns by cluster</label>
         <canvas id="matrix" aria-label="Heatmap of the selected matrix; rows are points i, columns are candidates k"></canvas>
         <div class="legend"><span id="lmin"></span><canvas id="lbar" width="140" height="10"></canvas><span id="lmax"></span><span id="lnote"></span></div>
-        <p class="hint">Rows are points i, columns are candidates k. Point at a cell to see how it is computed; click to pin it. Steps of the demo above update the matrix live.</p>
+        <p class="hint">Rows are voters i, columns are candidates k. Point at a cell to see how it is computed; click to pin it. R highlights the voter's row, A the candidate's column. Steps of the demo above update the matrix live.</p>
       </div>
       <div class="card cell" id="cell" aria-live="polite"></div>
     </div>
@@ -475,9 +501,23 @@ function drawMatrix() {
   g.save(); g.translate(11, M); g.rotate(Math.PI / 2); g.fillText("i →", 0, 0); g.restore();
   const s = cellSel();
   if (s) {
-    const r = order.indexOf(s.i), c = order.indexOf(s.k);
-    g.strokeStyle = css("--ink"); g.lineWidth = 2;
-    g.strokeRect(M + c * cs - 2, M + r * cs - 2, cs + 4, cs + 4);
+    const r = order.indexOf(s.i), c = order.indexOf(s.k), span = N * cs;
+    // dim everything outside the row (a vote) or the column (a reply) the value is computed from
+    g.fillStyle = css("--panel"); g.globalAlpha = 0.65;
+    if (mview === "R" || mview === "E") {
+      g.fillRect(M, M, span, r * cs); g.fillRect(M, M + (r + 1) * cs, span, span - (r + 1) * cs);
+    } else if (mview === "A") {
+      g.fillRect(M, M, c * cs, span); g.fillRect(M + (c + 1) * cs, M, span - (c + 1) * cs, span);
+    }
+    g.globalAlpha = 1;
+    const box = (rr, cc, color, w) => { g.strokeStyle = color; g.lineWidth = w; g.strokeRect(M + cc * cs - 1.5, M + rr * cs - 1.5, cs + 3, cs + 3); };
+    if (mview === "R") box(r, order.indexOf(bestRival(s.i, s.k).kb), css("--muted"), 1.5);
+    if (mview === "E") box(r, order.indexOf(topChoice(s.i).k), css("--muted"), 1.5);
+    if (mview === "A") {
+      g.fillStyle = css("--pos");
+      for (const ii of supporters(s.i, s.k).list) g.fillRect(2, M + order.indexOf(ii) * cs, M - 5, Math.max(cs, 2));
+    }
+    box(r, c, css("--ink"), 2);
   }
   $("matrix")._map = { order, M, cs, N };
   // legend
@@ -493,71 +533,95 @@ function drawMatrix() {
 }
 
 function esc(t) { return String(t).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]); }
+// i's best alternative to k: the k′ ≠ k with the largest a(i,k′) + s(i,k′)
+function bestRival(i, k) {
+  const { N, S, A } = ap; let best = -Infinity, kb = -1;
+  for (let kk = 0; kk < N; kk++) if (kk !== k && A[i * N + kk] + S[i * N + kk] > best) { best = A[i * N + kk] + S[i * N + kk]; kb = kk; }
+  return { kb, best };
+}
+// voters other than i that currently vote for k: r(i′,k) > 0
+function supporters(i, k) {
+  const { N, R } = ap, list = []; let sum = 0;
+  for (let ii = 0; ii < N; ii++) if (ii !== k && ii !== i && R[ii * N + k] > 0) { list.push(ii); sum += R[ii * N + k]; }
+  return { list, sum };
+}
+// the candidate at the top of i's ballot, by r(i,k) + a(i,k)
+function topChoice(i) {
+  const { N, R, A } = ap; let k = 0, v = -Infinity;
+  for (let kk = 0; kk < N; kk++) if (R[i * N + kk] + A[i * N + kk] > v) { v = R[i * N + kk] + A[i * N + kk]; k = kk; }
+  return { k, v };
+}
+const votes = n => `${n} vote${n === 1 ? "" : "s"}`;
+
 function drawCell() {
   const box = $("cell"), s = cellSel();
   if (!s) {
     box.innerHTML = `<h3>Pick a cell</h3><p class="note">Point at the heatmap to see one entry worked out with the current numbers. ` +
-      `Rows are points <i>i</i>, columns are candidates <i>k</i>; the diagonal holds each point's view of itself.</p>` +
-      `<p class="note">Iteration ${ap.iter}${ap.iter ? "" : ": R and A are still zero. Press Step or Watch messages to fill them."}</p>`;
+      `Rows are voters <i>i</i>, columns are candidates <i>k</i>; the diagonal is each point voting on itself.</p>` +
+      `<p class="note">Iteration ${ap.iter}${ap.iter ? "" : ": no votes yet, so R and A are zero. Press Step or Watch messages to start the rounds."}</p>`;
     return;
   }
   const { i, k } = s, { N, S, R, A } = ap, lam = lambda(), o = i * N + k, lab = ap.labels();
   const isEx = j => ap.ex.includes(j);
   const pt = j => `#${j} (${pts[j][0].toFixed(3)}, ${pts[j][1].toFixed(3)})${isEx(j) ? ' <span class="tag ex">exemplar</span>' : ""}`;
-  let title, lines, note = "";
+  const damped = (old, nw) => `next   = ${lam.toFixed(2)}·${par(old)} + ${(1 - lam).toFixed(2)}·${par(nw)} = ${fmt(lam * old + (1 - lam) * nw)}`;
+  let title, lines, say;
   if (mview === "S") {
     if (i === k) {
       title = `s(${k},${k}): preference`;
       lines = `s(k,k) = p = median × ${prefMult().toFixed(3)}\n       = ${par(sim.median)} × ${prefMult().toFixed(3)}\n       = ${fmt(S[o])}`;
-      note = "Every point gets the same preference here. Raise it and more points can afford to be exemplars.";
+      say = `How highly #${k} rates itself as a candidate. Every point gets the same p here. Raise the preference (toward 0) and running gets cheaper, so more candidates survive the count.`;
     } else {
       const dx = pts[i][0] - pts[k][0], dy = pts[i][1] - pts[k][1];
       title = `s(${i},${k}): similarity`;
       lines = `s(i,k) = −(Δx² + Δy²)\n       = −(${par(dx)}² + ${par(dy)}²)\n       = ${fmt(S[o])}`;
-      note = "The only formula that touches coordinates. A tiny fixed noise (about 1e-9) breaks exact ties.";
+      say = `Voter #${i} rates candidate #${k} at ${fmt(S[o])}: minus their squared distance (${fmt(Math.hypot(dx, dy))} apart). Closer candidates get ratings nearer 0. This is the only place coordinates are used; a tiny fixed noise breaks exact ties.`;
     }
   } else if (mview === "R") {
-    let best = -Infinity, kb = -1;
-    for (let kk = 0; kk < N; kk++) if (kk !== k && A[i * N + kk] + S[i * N + kk] > best) { best = A[i * N + kk] + S[i * N + kk]; kb = kk; }
-    const rn = S[o] - best;
-    title = `r(${i},${k}): responsibility`;
+    const { kb, best } = bestRival(i, k), rn = S[o] - best;
+    title = i === k ? `r(${k},${k}): self-vote` : `r(${i},${k}): vote`;
     lines = `r(i,k) ← s(i,k) − max_{k′≠k}[a(i,k′) + s(i,k′)]\n` +
-            `best rival k′ = #${kb}: a = ${fmt(A[i * N + kb])}, s = ${fmt(S[i * N + kb])}\n` +
+            `best alternative k′ = #${kb}: a = ${fmt(A[i * N + kb])}, s = ${fmt(S[i * N + kb])}\n` +
             `new    = ${fmt(S[o])} − (${fmt(best)}) = ${fmt(rn)}\n` +
-            `stored = ${fmt(R[o])}\n` +
-            `next   = ${lam.toFixed(2)}·${par(R[o])} + ${(1 - lam).toFixed(2)}·${par(rn)} = ${fmt(lam * R[o] + (1 - lam) * rn)}`;
-    note = i === k ? "Self-responsibility: the preference minus how well another candidate could represent this point."
-                   : rn > 0 ? `Positive: #${k} beats every alternative for point #${i}.` : `Negative: point #${i} has a better option than #${k}.`;
+            `stored = ${fmt(R[o])}\n` + damped(R[o], rn);
+    say = i === k
+      ? `#${k}'s self-vote: its preference ${fmt(S[o])} against its best alternative #${kb} (rating plus reply ${fmt(best)}). ` +
+        (rn > 0 ? `Positive: #${k} would rather represent itself.` : `Negative: #${k} would rather join #${kb}.`)
+      : rn > 0
+        ? `#${i} votes for #${k}: #${k}'s rating ${fmt(S[o])} beats #${i}'s best alternative #${kb} (rating plus reply ${fmt(best)}) by ${fmt(rn)}.`
+        : `#${i} doesn't vote for #${k}: its best alternative #${kb} (rating plus reply ${fmt(best)}) beats #${k}'s rating ${fmt(S[o])} by ${fmt(-rn)}.`;
+    say += " The row is everything voter #" + i + " compares; the grey box is its best alternative.";
   } else if (mview === "A") {
-    let pos = 0, n = 0;
-    for (let ii = 0; ii < N; ii++) if (ii !== k && ii !== i && R[ii * N + k] > 0) { pos += R[ii * N + k]; n++; }
+    const { list, sum } = supporters(i, k), n = list.length;
     if (i === k) {
-      title = `a(${k},${k}): self-availability`;
+      title = `a(${k},${k}): total backing`;
       lines = `a(k,k) ← Σ_{i′≠k} max(0, r(i′,k))\n` +
-              `new    = ${fmt(pos)}   (${n} supporter${n === 1 ? "" : "s"})\n` +
-              `stored = ${fmt(A[o])}\n` +
-              `next   = ${lam.toFixed(2)}·${par(A[o])} + ${(1 - lam).toFixed(2)}·${par(pos)} = ${fmt(lam * A[o] + (1 - lam) * pos)}`;
-      note = "The total positive responsibility that other points send to this candidate.";
+              `new    = ${fmt(sum)}   (${votes(n)})\n` +
+              `stored = ${fmt(A[o])}\n` + damped(A[o], sum);
+      say = `#${k}'s total backing: ${votes(n)} for it, worth ${fmt(sum)} together. Its own self-vote is added at the count. Orange ticks mark the voters (their votes are in column ${k} of R).`;
     } else {
-      const rkk = R[k * N + k], an = Math.min(0, rkk + pos);
-      title = `a(${i},${k}): availability`;
+      const rkk = R[k * N + k], tot = rkk + sum, an = Math.min(0, tot);
+      title = `a(${i},${k}): reply`;
       lines = `a(i,k) ← min(0, r(k,k) + Σ_{i′∉{i,k}} max(0, r(i′,k)))\n` +
-              `r(k,k) = ${fmt(rkk)};  Σ = ${fmt(pos)}  (${n} supporter${n === 1 ? "" : "s"})\n` +
-              `new    = min(0, ${fmt(rkk + pos)}) = ${fmt(an)}\n` +
-              `stored = ${fmt(A[o])}\n` +
-              `next   = ${lam.toFixed(2)}·${par(A[o])} + ${(1 - lam).toFixed(2)}·${par(an)} = ${fmt(lam * A[o] + (1 - lam) * an)}`;
-      note = an < 0 ? `Capped below zero: #${k} lacks enough support to look available to #${i}.`
-                    : `Zero, the most it can be: #${k} has enough support (the min(0, ·) cap applies).`;
+              `r(k,k) = ${fmt(rkk)};  Σ = ${fmt(sum)}  (${votes(n)})\n` +
+              `new    = min(0, ${fmt(tot)}) = ${fmt(an)}\n` +
+              `stored = ${fmt(A[o])}\n` + damped(A[o], an);
+      say = `#${k} replies to #${i} with its backing apart from #${i}: self-vote ${fmt(rkk)} plus ${votes(n)} from others worth ${fmt(sum)}, total ${fmt(tot)}. ` +
+        (tot < 0 ? `Negative, so #${k} warns #${i} it is not a viable candidate.` : `Positive, so #${k} is viable; the reply is capped at 0, so viability is never a bonus.`) +
+        ` Orange ticks mark the ${votes(n)}.`;
     }
   } else {
-    title = i === k ? `r(${k},${k}) + a(${k},${k}): evidence` : `r(${i},${k}) + a(${i},${k})`;
+    const top = topChoice(i);
+    title = i === k ? `r(${k},${k}) + a(${k},${k}): the count` : `r(${i},${k}) + a(${i},${k}): ballot entry`;
     lines = `r + a = ${fmt(R[o])} + ${par(A[o])}\n      = ${fmt(R[o] + A[o])}`;
-    note = i === k ? (R[o] + A[o] > 0 ? `Positive, so #${k} is an exemplar.` : `Not positive, so #${k} is not an exemplar.`)
-                   : `Row i of R + A is point #${i}'s scorecard; its largest entry is the candidate it leans toward.`;
+    say = i === k
+      ? `The count for #${k}: self-vote ${fmt(R[o])} plus backing ${fmt(A[o])} = ${fmt(R[o] + A[o])}. ` +
+        (R[o] + A[o] > 0 ? `Positive, so #${k} is elected as an exemplar.` : `Not positive, so #${k} is not elected.`)
+      : `Row ${i} is #${i}'s ballot: vote plus reply for every candidate. Its top choice right now is #${top.k} (${fmt(top.v)}), marked with the grey box.`;
   }
   box.innerHTML = `<h3>${esc(title)}${pinned ? ' <span class="tag">pinned</span>' : ""}</h3>` +
-    `<p class="who">i = ${pt(i)}<br>k = ${pt(k)}<br>exemplar of i: ${lab[i] < 0 ? "none" : "#" + lab[i]} · iteration ${ap.iter}</p>` +
-    `<div class="eq">${esc(lines)}</div><p class="note">${esc(note)}</p>`;
+    `<p class="who">voter i = ${pt(i)}<br>candidate k = ${pt(k)}<br>exemplar of i: ${lab[i] < 0 ? "none" : "#" + lab[i]} · iteration ${ap.iter}</p>` +
+    `<p class="say">${esc(say)}</p><div class="eq">${esc(lines)}</div>`;
 }
 function matrixCellAt(e) {
   const m = $("matrix")._map; if (!m) return null;
